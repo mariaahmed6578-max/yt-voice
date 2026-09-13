@@ -23,6 +23,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install requests
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Plan shards + fetch reference profile
         id: plan
         working-directory: scripts

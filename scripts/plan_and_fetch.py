@@ -8,7 +8,8 @@ profile from the private yt-core repo, decides how many shards to use, and
 writes:
 
   manifest.json         -- job_id, channel_id, total_shards, per-shard text
-  profile/reference.wav
+  profile/reference.wav -- always a clean, real WAV, regardless of what
+                            format the channel's profile was uploaded in
   profile/reference.json
 
 ...which the `shard` and `collect` jobs then pick up as artifacts. Also
@@ -18,6 +19,7 @@ strategy can fan out.
 from __future__ import annotations
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,6 +41,45 @@ def estimate_seconds(text: str) -> float:
     return words / WORDS_PER_SECOND if words else 1.0
 
 
+def fetch_and_normalize_reference(yt_core_repo: str, yt_core_token: str, channel_id: str, profile_dir: Path) -> dict:
+    """reference.json is fetched FIRST because it names the actual audio
+    file (see "audio_file" below) -- phone recordings are almost never
+    real .wav (usually .m4a/.aac/.3gp from the Dashboard's upload page),
+    so this never assumes a fixed filename or format. Whatever comes back
+    is re-encoded through ffmpeg into a clean, known-good reference.wav --
+    that sidesteps ever needing to know whether F5-TTS's own audio loader
+    can read the original phone format directly.
+    """
+    ref_json = raw_fetch(yt_core_repo, f"data/voice_profiles/{channel_id}/reference.json", token=yt_core_token)
+    if ref_json is None:
+        print(f"::error::No voice profile found for channel '{channel_id}' in {yt_core_repo} "
+              f"(expected data/voice_profiles/{channel_id}/reference.json).")
+        sys.exit(1)
+    reference_meta = json.loads(ref_json.decode("utf-8"))
+    # "audio_file" is set by the Dashboard's upload route; default here
+    # only covers a profile placed by hand before that field existed.
+    audio_file = reference_meta.get("audio_file", "reference.wav")
+
+    raw_audio = raw_fetch(yt_core_repo, f"data/voice_profiles/{channel_id}/{audio_file}", token=yt_core_token)
+    if raw_audio is None:
+        print(f"::error::reference.json for '{channel_id}' points at '{audio_file}' but that file is missing.")
+        sys.exit(1)
+
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(audio_file).suffix or ".bin"
+    original_path = profile_dir / f"original{suffix}"
+    original_path.write_bytes(raw_audio)
+    (profile_dir / "reference.json").write_bytes(ref_json)
+
+    ref_wav = profile_dir / "reference.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(original_path), "-ar", "24000", "-ac", "1", str(ref_wav)],
+        check=True, capture_output=True, text=True,
+    )
+    original_path.unlink()
+    return reference_meta
+
+
 def main() -> None:
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
     payload = event["client_payload"]
@@ -50,16 +91,7 @@ def main() -> None:
     yt_core_token = os.environ["YT_CORE_READONLY_PAT"]
 
     profile_dir = Path("profile")
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    ref_wav = raw_fetch(yt_core_repo, f"data/voice_profiles/{channel_id}/reference.wav", token=yt_core_token)
-    ref_json = raw_fetch(yt_core_repo, f"data/voice_profiles/{channel_id}/reference.json", token=yt_core_token)
-    if ref_wav is None or ref_json is None:
-        print(f"::error::No voice profile found for channel '{channel_id}' in {yt_core_repo} "
-              f"(expected data/voice_profiles/{channel_id}/reference.wav + reference.json).")
-        sys.exit(1)
-    (profile_dir / "reference.wav").write_bytes(ref_wav)
-    (profile_dir / "reference.json").write_bytes(ref_json)
-    reference_meta = json.loads(ref_json.decode("utf-8"))
+    reference_meta = fetch_and_normalize_reference(yt_core_repo, yt_core_token, channel_id, profile_dir)
 
     seconds = estimate_seconds(script_text)
     shard_count = max(1, min(MAX_SHARDS_PER_JOB, round(seconds / TARGET_SECONDS_PER_SHARD) or 1))
