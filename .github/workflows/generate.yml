@@ -7,6 +7,18 @@ name: Generate Voice
 on:
   repository_dispatch:
     types: [voice_job]
+  workflow_dispatch:
+    inputs:
+      channel_id:
+        description: 'Channel key (must already have a profile at data/voice_profiles/<channel_id>/)'
+        required: true
+      script_text:
+        description: 'Text to synthesize'
+        required: true
+        default: 'Hello, my name is Maria. I am happy to be here today. I hope you are doing well.'
+      job_id:
+        description: 'Optional job id (blank = auto test-<timestamp>)'
+        required: false
 
 permissions:
   contents: write
@@ -16,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       job_id: ${{ steps.plan.outputs.job_id }}
+      channel_id: ${{ steps.plan.outputs.channel_id }}
+      dispatched_at: ${{ steps.plan.outputs.dispatched_at }}
       shards: ${{ steps.plan.outputs.shards }}
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +74,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Install dependencies
         run: pip install -r requirements.txt
       - uses: actions/download-artifact@v4
@@ -110,13 +125,13 @@ jobs:
             --manifest manifest.json \
             --shards-root shards \
             --job-id "${{ needs.plan.outputs.job_id }}" \
-            --channel-id "${{ github.event.client_payload.channel_id }}" \
+            --channel-id "${{ needs.plan.outputs.channel_id }}" \
             --out-dir "results/${{ needs.plan.outputs.job_id }}" \
-            --started-at "${{ github.event.client_payload.dispatched_at }}"
+            --started-at "${{ needs.plan.outputs.dispatched_at }}"
       - name: Notify
         if: always()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python scripts/notify.py "yt-voice job ${{ needs.plan.outputs.job_id }} (channel ${{ github.event.client_payload.channel_id }}): collect step finished, check results/ for status" || true
+          python scripts/notify.py "yt-voice job ${{ needs.plan.outputs.job_id }} (channel ${{ needs.plan.outputs.channel_id }}): collect step finished, check results/ for status" || true
