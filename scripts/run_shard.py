@@ -74,7 +74,21 @@ def main() -> None:
                 raise RuntimeError("f5-tts_infer-cli exited 0 but produced no output file")
             print(f"Shard {args.shard_index}: done on attempt {attempt}.")
             return
-        except Exception as exc:  # noqa: BLE001 -- any failure here should retry, not just specific types
+        except subprocess.CalledProcessError as exc:
+            # This is the one that was going silent before: check=True +
+            # capture_output=True means the actual error text was captured
+            # but never printed, so every failure just showed "exit status
+            # 1" with no way to tell why. Surfacing stdout/stderr here is
+            # the whole reason this except branch is split out from the
+            # generic one below.
+            last_exc = exc
+            print(f"Shard {args.shard_index} attempt {attempt}/{args.max_attempts}: "
+                  f"f5-tts_infer-cli exited {exc.returncode}")
+            print(f"--- stdout ---\n{exc.stdout}")
+            print(f"--- stderr ---\n{exc.stderr}")
+            if attempt < args.max_attempts:
+                time.sleep(min(60, 5 * 2 ** attempt))
+        except Exception as exc:  # noqa: BLE001 -- any other failure should retry too, not just CalledProcessError
             last_exc = exc
             print(f"Shard {args.shard_index} attempt {attempt}/{args.max_attempts} failed: {exc}")
             if attempt < args.max_attempts:
