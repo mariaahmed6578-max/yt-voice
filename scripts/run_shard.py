@@ -36,7 +36,13 @@ def synthesize(ref_audio: Path, ref_text: str, gen_text: str, out_dir: Path, out
         "-o", str(out_dir),
         "-w", f"{out_name}.wav",
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=900)
+    # 25 minutes -- this is CPU inference on a standard GitHub-hosted
+    # runner with no GPU, plus (on a cache miss) downloading the ~1.5GB
+    # model checkpoint from HuggingFace first. The actions/cache step
+    # added to generate.yml's shard job should make every run AFTER the
+    # first a lot faster, but this still needs to be generous enough for
+    # a cold cache.
+    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=1500)
 
 
 def main() -> None:
@@ -45,7 +51,7 @@ def main() -> None:
     parser.add_argument("--shard-index", type=int, required=True)
     parser.add_argument("--profile-dir", required=True)
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--max-attempts", type=int, default=2)
     args = parser.parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
@@ -74,6 +80,20 @@ def main() -> None:
                 raise RuntimeError("f5-tts_infer-cli exited 0 but produced no output file")
             print(f"Shard {args.shard_index}: done on attempt {attempt}.")
             return
+        except subprocess.TimeoutExpired as exc:
+            # Same visibility gap as CalledProcessError had: capture_output
+            # buffers everything, so a timeout was showing "timed out
+            # after Ns" with nothing else -- no way to tell whether it was
+            # still downloading the model, still loading it, or actually
+            # mid-synthesis when it got killed. exc.stdout/exc.stderr hold
+            # whatever was captured up to the kill, which is exactly what
+            # we need to tell those apart.
+            last_exc = exc
+            print(f"Shard {args.shard_index} attempt {attempt}/{args.max_attempts}: timed out after {exc.timeout}s")
+            print(f"--- stdout so far ---\n{exc.stdout}")
+            print(f"--- stderr so far ---\n{exc.stderr}")
+            if attempt < args.max_attempts:
+                time.sleep(min(60, 5 * 2 ** attempt))
         except subprocess.CalledProcessError as exc:
             # This is the one that was going silent before: check=True +
             # capture_output=True means the actual error text was captured

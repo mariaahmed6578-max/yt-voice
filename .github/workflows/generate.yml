@@ -74,6 +74,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Cache HuggingFace models (F5-TTS + Vocos, ~1.5GB)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ hashFiles('requirements.txt') }}
       - name: Install dependencies
         run: pip install -r requirements.txt
       - uses: actions/download-artifact@v4
