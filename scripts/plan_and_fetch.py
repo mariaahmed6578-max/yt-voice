@@ -18,10 +18,12 @@ strategy can fan out.
 """
 from __future__ import annotations
 import json
+import math
 import os
 import subprocess
 import sys
 import time
+import wave
 from pathlib import Path
 
 from common import raw_fetch, split_balanced
@@ -29,9 +31,18 @@ from common import raw_fetch, split_balanced
 # Student Pack concurrency ceiling is 40 (see repo README) -- a single job
 # is capped well under that so it never ALONE exhausts the whole account's
 # pool. A second job arriving mid-run still gets native GitHub Actions
-# queuing (see README "Concurrency" section) instead of starving.
+# queuing (see README "Concurrency" section) instead of starving. This is
+# a SOFT cap now -- see the shard-count calculation in main(): a script
+# long enough that even MAX_SHARDS_PER_JOB shards would each break
+# F5-TTS's 30s-total limit uses more than this anyway, because a job that
+# respects the pool-sharing cap but fails to generate valid audio helps
+# no one.
 MAX_SHARDS_PER_JOB = int(os.environ.get("MAX_SHARDS_PER_JOB", "20"))
-TARGET_SECONDS_PER_SHARD = float(os.environ.get("TARGET_SECONDS_PER_SHARD", "45"))
+# Floor on how much content a single shard may cover -- keeps a short
+# script from being sliced into single-word fragments that would sound
+# choppy once stitched back together. A short script simply ends up with
+# fewer shards; it never goes below this regardless of MAX_SHARDS_PER_JOB.
+MIN_SECONDS_PER_SHARD = float(os.environ.get("MIN_SECONDS_PER_SHARD", "6"))
 # Rough narration rate, only used to size shards -- doesn't need to be
 # exact, just consistent enough that shards come out similarly sized.
 WORDS_PER_SECOND = 2.5
@@ -42,7 +53,7 @@ def estimate_seconds(text: str) -> float:
     return words / WORDS_PER_SECOND if words else 1.0
 
 
-def fetch_and_normalize_reference(yt_core_repo: str, yt_core_token: str, channel_id: str, profile_dir: Path) -> dict:
+def fetch_and_normalize_reference(yt_core_repo: str, yt_core_token: str, channel_id: str, profile_dir: Path) -> tuple[dict, float]:
     """reference.json is fetched FIRST because it names the actual audio
     file (see "audio_file" below) -- phone recordings are almost never
     real .wav (usually .m4a/.aac/.3gp from the Dashboard's upload page),
@@ -50,6 +61,13 @@ def fetch_and_normalize_reference(yt_core_repo: str, yt_core_token: str, channel
     is re-encoded through ffmpeg into a clean, known-good reference.wav --
     that sidesteps ever needing to know whether F5-TTS's own audio loader
     can read the original phone format directly.
+
+    Also measures and returns the converted clip's actual duration -- F5-TTS
+    caps a single generation call at 30s TOTAL, prompt (reference) audio
+    included, not 30s of output alone (confirmed against the upstream
+    README). main() uses this real, measured number -- not an assumed
+    8-12s -- to keep shards safely under that ceiling regardless of how
+    long any given channel's uploaded clip actually turned out to be.
     """
     ref_json = raw_fetch(yt_core_repo, f"data/voice_profiles/{channel_id}/reference.json", token=yt_core_token)
     if ref_json is None:
@@ -78,7 +96,11 @@ def fetch_and_normalize_reference(yt_core_repo: str, yt_core_token: str, channel
         check=True, capture_output=True, text=True,
     )
     original_path.unlink()
-    return reference_meta
+
+    with wave.open(str(ref_wav), "rb") as wf:
+        ref_duration = wf.getnframes() / float(wf.getframerate())
+
+    return reference_meta, ref_duration
 
 
 def main() -> None:
@@ -107,10 +129,52 @@ def main() -> None:
     yt_core_token = os.environ["YT_CORE_READONLY_PAT"]
 
     profile_dir = Path("profile")
-    reference_meta = fetch_and_normalize_reference(yt_core_repo, yt_core_token, channel_id, profile_dir)
+    reference_meta, ref_duration = fetch_and_normalize_reference(yt_core_repo, yt_core_token, channel_id, profile_dir)
+
+    # F5-TTS's hard ceiling is 30s TOTAL per single generation call --
+    # reference audio counts against that, not just the output (confirmed
+    # against the upstream README). Measured ref_duration (not an assumed
+    # 8-12s) is what actually determines how much headroom is left; a
+    # 2s safety margin avoids the truncation risk the docs warn about
+    # right at the boundary.
+    # F5-TTS's hard ceiling is 30s TOTAL per single generation call --
+    # reference audio counts against that, not just the output (confirmed
+    # against the upstream README). Measured ref_duration (not an assumed
+    # 8-12s) is what actually determines how much headroom is left; a
+    # 2s safety margin avoids the truncation risk the docs warn about
+    # right at the boundary.
+    F5TTS_TOTAL_CAP_SECONDS = 30.0
+    SAFETY_MARGIN_SECONDS = 2.0
+    safe_cap = max(5.0, F5TTS_TOTAL_CAP_SECONDS - ref_duration - SAFETY_MARGIN_SECONDS)
 
     seconds = estimate_seconds(script_text)
-    shard_count = max(1, min(MAX_SHARDS_PER_JOB, round(seconds / TARGET_SECONDS_PER_SHARD) or 1))
+
+    # Always split as finely as the pool/config usefully allows -- for
+    # speed, since shards run in parallel and compute itself is free --
+    # subject to two bounds, in this priority order:
+    #
+    #  1. FLOOR (hard, correctness): no single shard's audio may exceed
+    #     safe_cap, or F5-TTS can fail/truncate that call outright. This
+    #     can push shard_count ABOVE MAX_SHARDS_PER_JOB for a long enough
+    #     script -- deliberately: a job that stays under the
+    #     pool-sharing cap but produces broken audio helps no one.
+    #  2. CEILING (soft, quality + pool sharing): never split finer than
+    #     MIN_SECONDS_PER_SHARD per shard (avoids single-word fragments
+    #     sounding choppy once stitched), and never claim more than
+    #     MAX_SHARDS_PER_JOB of the shared pool unless #1 forces it.
+    #
+    # A short script naturally lands on fewer shards through bound #2
+    # alone; a long one is spread as wide as MAX_SHARDS_PER_JOB allows,
+    # or wider if #1 requires it.
+    min_shards_needed = max(1, math.ceil(seconds / safe_cap))
+    max_shards_useful = max(1, math.floor(seconds / MIN_SECONDS_PER_SHARD))
+    shard_count = max(min_shards_needed, min(MAX_SHARDS_PER_JOB, max_shards_useful))
+    if shard_count > MAX_SHARDS_PER_JOB:
+        print(f"::warning::This script needs {shard_count} shards to keep each one under "
+              f"F5-TTS's {safe_cap:.0f}s-per-call limit, above MAX_SHARDS_PER_JOB="
+              f"{MAX_SHARDS_PER_JOB} -- using {shard_count} anyway (correctness over the "
+              f"pool-sharing cap).")
+
     texts = split_balanced(script_text, shard_count)
 
     manifest = {
@@ -129,7 +193,9 @@ def main() -> None:
         fh.write(f"dispatched_at={dispatched_at}\n")
         fh.write(f"shards={json.dumps(list(range(shard_count)))}\n")
 
-    print(f"Planned {shard_count} shard(s) for job {job_id} (channel={channel_id}, ~{seconds:.0f}s estimated).")
+    print(f"Planned {shard_count} shard(s) for job {job_id} (channel={channel_id}, ~{seconds:.0f}s estimated text, "
+          f"ref_duration={ref_duration:.1f}s, safe_cap={safe_cap:.1f}s/shard, "
+          f"min_shards_needed={min_shards_needed}, max_shards_useful={max_shards_useful}).")
 
 
 if __name__ == "__main__":

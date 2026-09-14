@@ -44,6 +44,15 @@ jobs:
         env:
           YT_CORE_REPO: ${{ vars.YT_CORE_REPO }}
           YT_CORE_READONLY_PAT: ${{ secrets.YT_CORE_READONLY_PAT }}
+          # Tunable without touching code -- set these under Settings ->
+          # Secrets and variables -> Actions -> Variables. Shard count is
+          # now always maximized within two bounds (see plan_and_fetch.py):
+          # never below MIN_SECONDS_PER_SHARD of content per shard (avoids
+          # choppy single-word fragments), never above MAX_SHARDS_PER_JOB
+          # of the pool (except when F5-TTS's own 30s-per-call limit
+          # forces more, which always takes priority).
+          MIN_SECONDS_PER_SHARD: ${{ vars.MIN_SECONDS_PER_SHARD || '6' }}
+          MAX_SHARDS_PER_JOB: ${{ vars.MAX_SHARDS_PER_JOB || '20' }}
         run: python plan_and_fetch.py
       - uses: actions/upload-artifact@v4
         with:
