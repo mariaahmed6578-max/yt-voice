@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from common import raw_fetch, split_balanced
@@ -82,10 +83,25 @@ def fetch_and_normalize_reference(yt_core_repo: str, yt_core_token: str, channel
 
 def main() -> None:
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-    payload = event["client_payload"]
-    job_id = str(payload["job_id"])
-    channel_id = str(payload["channel_id"])
-    script_text = str(payload["script_text"])
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "repository_dispatch")
+
+    if event_name == "workflow_dispatch":
+        # Manual test trigger (Actions tab -> Generate Voice -> Run
+        # workflow) -- lets you test one channel's voice generation
+        # directly without running the whole main pipeline first. GitHub's
+        # manual-dispatch inputs live under event["inputs"], not
+        # event["client_payload"] -- everything past this branch treats
+        # the two the same way.
+        raw = event.get("inputs", {})
+        job_id = str(raw.get("job_id") or f"test-{int(time.time())}")
+        dispatched_at = time.time()
+    else:
+        raw = event["client_payload"]
+        job_id = str(raw["job_id"])
+        dispatched_at = raw.get("dispatched_at", time.time())
+
+    channel_id = str(raw["channel_id"])
+    script_text = str(raw["script_text"])
 
     yt_core_repo = os.environ["YT_CORE_REPO"]
     yt_core_token = os.environ["YT_CORE_READONLY_PAT"]
@@ -103,12 +119,14 @@ def main() -> None:
         "total_shards": shard_count,
         "reference_text": reference_meta.get("transcript", ""),
         "shards": [{"index": i, "text": t} for i, t in enumerate(texts)],
-        "dispatched_at": payload.get("dispatched_at"),
+        "dispatched_at": dispatched_at,
     }
     Path("manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
         fh.write(f"job_id={job_id}\n")
+        fh.write(f"channel_id={channel_id}\n")
+        fh.write(f"dispatched_at={dispatched_at}\n")
         fh.write(f"shards={json.dumps(list(range(shard_count)))}\n")
 
     print(f"Planned {shard_count} shard(s) for job {job_id} (channel={channel_id}, ~{seconds:.0f}s estimated).")
