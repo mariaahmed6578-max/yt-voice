@@ -41,6 +41,32 @@ another's.
 the 40-slot pool ONE job can claim, so a single very long script can't
 starve every other channel's job out of the pool entirely.
 
+## Factory Pool -- deploying this repo more than once
+
+One account's 40-slot Actions concurrency ceiling is a hard ceiling on
+this repo alone. For a single very long script (an hour-long narration,
+say) that wants more raw shard throughput than one account comfortably
+gives, `yt-core` can be pointed at SEVERAL independent deployments of
+this exact repo (different GitHub accounts, identical code -- nothing in
+this repo needs to know it's one of several) and treat them as a pool:
+it estimates the shard count a long script needs, and if that's more
+than one factory's configured budget, splits the script across as many
+factories as needed, dispatching each piece as its own ordinary job to a
+different deployment of this repo. Each deployment plans/shards/collects
+its own piece exactly as described above -- entirely unaware of the
+others. `yt-core` downloads each piece's `final.wav` and concatenates
+them back in original order.
+
+To add a factory to the pool: repeat steps 1-3 below on a fresh GitHub
+account (same repo, same setup), then add its `{repo, pat, max_shards}`
+to `VOICE_FACTORIES_JSON` on the `yt-core`/`yt-runner` side instead of
+(or in addition to) the single `VOICE_SERVICE_REPO`/
+`VOICE_SERVICE_DISPATCH_PAT` pair -- see `voice_clone_client.py`'s
+module docstring. `max_shards` is that factory's own configurable
+budget; set it to whatever that account's Actions concurrency ceiling
+comfortably supports (40 on Student Pack, less on a free/non-Student
+account).
+
 ## GPU vs CPU -- please read before assuming timing
 
 Standard GitHub-hosted Actions runners (what a public repo gets for free)
@@ -66,8 +92,11 @@ full video's narration.
    fine-grained PAT scoped to THIS repo, **Contents: Read & write** --
    write is needed because `dispatches` and reading `results/` both go
    through it) and set `VOICE_SERVICE_REPO` (e.g. `yourstudentaccount/yt-voice`)
-   as an env var in `yt-runner`'s `video-pipeline.yml` -- see
-   `yt-core-additions/PATCH_INSTRUCTIONS.md` in the design bundle.
+   as an env var in `yt-runner`'s `video-pipeline.yml`. **Or**, to pool
+   several deployments of this same repo together (see "Factory Pool"
+   below), add this one's `{repo, pat, max_shards}` as an entry in the
+   `VOICE_FACTORIES_JSON` secret instead -- see `voice_clone_client.py`'s
+   module docstring in `yt-core`.
 5. Record a real 8-12 second reference clip in your own voice (a full
    sentence, clean single take), write out its exact transcript, and drop
    both as `scripts/canary/profile/reference.wav` +
