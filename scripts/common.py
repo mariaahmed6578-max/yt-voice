@@ -97,23 +97,45 @@ def split_balanced(text: str, n: int) -> list[str]:
     the chunk COUNT first -- that count IS the shard count the dispatcher
     already decided on (driven by the 40-slot pool / target seconds per
     shard), not a per-chunk character limit.
+
+    The target chunk size is RECOMPUTED after every chunk closes, from
+    whatever text and chunk-slots remain -- not fixed once from the whole
+    text up front. A fixed target (len(text) / n, computed once) lets a
+    run of sentences shorter than that target close out most buckets
+    early, leaving nothing to absorb any sentences shorter than the
+    original target that show up later -- for a script whose sentence
+    count exceeds n (routine for narration text), every remaining
+    sentence past the (n-1)th bucket then has nowhere to go but the very
+    last chunk, unconditionally, however many there are. Recomputing the
+    target against the shrinking remainder keeps each closed bucket sized
+    to what's actually left, so a late run of short sentences gets spread
+    across the remaining buckets instead of all landing in the last one.
     """
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
     if not sentences:
         return [text] + [""] * (n - 1)
     if n <= 1:
         return [text]
-    target = len(text) / n
+
     chunks: list[str] = []
-    current = ""
-    for sentence in sentences:
-        candidate = f"{current} {sentence}".strip()
-        if current and len(candidate) >= target and len(chunks) < n - 1:
-            chunks.append(current)
-            current = sentence
-        else:
+    remaining = list(sentences)
+    for i in range(n - 1):
+        chunks_left = n - i
+        remaining_len = sum(len(s) for s in remaining) + max(0, len(remaining) - 1)
+        target = remaining_len / chunks_left
+        current = ""
+        while remaining:
+            candidate = f"{current} {remaining[0]}".strip()
+            if current and len(candidate) >= target:
+                break
             current = candidate
-    chunks.append(current)
+            remaining.pop(0)
+        if not current and remaining:
+            # A single sentence alone already meets/exceeds target -- take
+            # it anyway rather than leaving this bucket empty.
+            current = remaining.pop(0)
+        chunks.append(current)
+    chunks.append(" ".join(remaining))
     # Rare edge case: very few/long sentences under-fill the requested
     # count -- pad with empty chunks rather than silently handing back
     # fewer shards than the matrix strategy was already built for.
