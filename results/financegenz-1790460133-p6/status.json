@@ -1,0 +1,12 @@
+{
+  "job_id": "financegenz-1790460133-p6",
+  "channel_id": "financegenz",
+  "status": "success",
+  "total_shards": 16,
+  "empty_shards": [
+    14,
+    15
+  ],
+  "generation_seconds": 933.7,
+  "checked_at": "2026-09-27T00:09:29Z"
+}
