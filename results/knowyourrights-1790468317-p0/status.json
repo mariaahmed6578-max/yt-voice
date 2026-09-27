@@ -1,0 +1,11 @@
+{
+  "job_id": "knowyourrights-1790468317-p0",
+  "channel_id": "knowyourrights",
+  "status": "success",
+  "total_shards": 5,
+  "empty_shards": [
+    4
+  ],
+  "generation_seconds": 935.2,
+  "checked_at": "2026-09-27T01:01:55Z"
+}
