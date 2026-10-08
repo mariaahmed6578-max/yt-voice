@@ -1,9 +1,0 @@
-{
-  "job_id": "historysleep-1791500375-p0",
-  "channel_id": "historysleep",
-  "status": "success",
-  "total_shards": 5,
-  "empty_shards": [],
-  "generation_seconds": 754.0,
-  "checked_at": "2026-10-08T23:27:59Z"
-}
