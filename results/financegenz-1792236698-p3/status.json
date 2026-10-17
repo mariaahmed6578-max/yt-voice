@@ -1,10 +1,18 @@
 {
   "job_id": "financegenz-1792236698-p3",
   "channel_id": "financegenz",
-  "status": "partial_failed",
+  "status": "success",
   "total_shards": 17,
-  "failed_shards": [
-    6
+  "empty_shards": [
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
   ],
-  "checked_at": "2026-10-17T13:22:51Z"
+  "generation_seconds": 1716.2,
+  "checked_at": "2026-10-17T13:51:43Z"
 }
