@@ -4,8 +4,7 @@
   "status": "partial_failed",
   "total_shards": 17,
   "failed_shards": [
-    2,
-    3
+    2
   ],
-  "checked_at": "2026-10-23T08:38:12Z"
+  "checked_at": "2026-10-23T09:32:39Z"
 }
