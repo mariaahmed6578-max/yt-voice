@@ -1,10 +1,18 @@
 {
   "job_id": "ancientdailylife-1793232754-p1",
   "channel_id": "ancientdailylife",
-  "status": "partial_failed",
+  "status": "success",
   "total_shards": 19,
-  "failed_shards": [
-    3
+  "empty_shards": [
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18
   ],
-  "checked_at": "2026-10-29T01:14:19Z"
+  "generation_seconds": 1777.0,
+  "checked_at": "2026-10-29T01:44:05Z"
 }
