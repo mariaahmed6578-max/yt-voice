@@ -1,9 +1,0 @@
-{
-  "job_id": "aiworkflowsolo-1793575983-p0",
-  "channel_id": "aiworkflowsolo",
-  "status": "success",
-  "total_shards": 4,
-  "empty_shards": [],
-  "generation_seconds": 818.3,
-  "checked_at": "2026-11-01T23:50:07Z"
-}
